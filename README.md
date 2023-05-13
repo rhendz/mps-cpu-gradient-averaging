@@ -1,4 +1,4 @@
-# Python DDP
+# MPS/CPU Gradient Averaging
 
 This project requires Python 3.7 or later. We recommend using a virtual environment to manage the dependencies.
 
@@ -10,7 +10,7 @@ To set up a virtual environment for this project, run the following commands:
 make venv
 ```
 
-This will create a virtual environment in the `pytorch-ddp` directory.
+This will create a virtual environment in the `mps-cpu-gradient-averaging` directory.
 
 ## Installing dependencies
 
@@ -27,7 +27,7 @@ This will install all the necessary packages listed in the `requirements.txt` fi
 To use the virtual environment, make sure it is activated by running the following command;
 
 ```
-source pytorch-ddp/bin/activate
+source venv/bin/activate
 ```
 
 Once the virtual environment is activated, you can run the Pytorch scripts and use the packages installed in the virtual environment.

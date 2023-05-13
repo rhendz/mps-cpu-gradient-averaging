@@ -1,7 +1,7 @@
 # Makefile for creating a Python virtual environment and installing requirements
 
 # Name of the virtual environment
-VENV = .pytorch-ddp
+VENV = .venv
 
 # Command to create a virtual environment
 VENV_CMD = python3 -m venv $(VENV)
