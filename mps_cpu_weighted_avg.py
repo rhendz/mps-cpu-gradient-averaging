@@ -4,6 +4,8 @@ from torch.utils.data import DataLoader, Subset
 from torchvision.datasets import MNIST
 from torchvision.transforms import ToTensor
 
+from collections import OrderedDict
+
 from handwriting_recognition import HandwritingRecognitionModel
 
 print(f"PyTorch version: {torch.__version__}")
@@ -48,6 +50,8 @@ def run_test(model, device, test_loader, epoch, name=""):
 
         # Print the accuracy
         print(f"{device} {(name)}: Epoch {epoch+1}: Accuracy = {100*correct/total:.2f}%")
+        return 100.0*correct/total
+
     
 # A run_round returns the local gradient for a model, after performing epochs 
 # training/test and creates a model checkpoint
@@ -66,7 +70,6 @@ def run_round(model_checkpoint, device, train_loader, test_loader, epochs=1):
     base_epoch = checkpoint['epoch']
     loss = checkpoint['loss']
     
-    gradients = []
     last_epoch = base_epoch+epochs
 
     for epoch in range(base_epoch, last_epoch):
@@ -88,12 +91,7 @@ def run_round(model_checkpoint, device, train_loader, test_loader, epochs=1):
             # Update the model parameters
             optimizer.step()
 
-        # Collect gradient on final epoch
-        if epoch == last_epoch-1:
-            for param in model.parameters():
-                gradients.append(param.grad)
-
-        run_test(model, device, test_loader, epoch, name="Worker")
+        accuracy = run_test(model, device, test_loader, epoch, name="Worker")
 
     # Save the model checkpoint
     checkpoint = {
@@ -106,7 +104,7 @@ def run_round(model_checkpoint, device, train_loader, test_loader, epochs=1):
 
     torch.save(checkpoint, model_checkpoint)
 
-    return gradients
+    return [model.state_dict(), accuracy]
 
 def initialize_checkpoints(global_model, global_optimizer):
     for checkpoint_path, device in checkpoints.items():
@@ -129,22 +127,21 @@ def initialize_checkpoints(global_model, global_optimizer):
 
         torch.save(checkpoint, checkpoint_path)
             
-def compute_global_gradient(grad1, grad2):
-    if len(grad1) != len(grad2):
-        raise ValueError(f'Grad 1 with length {len(grad1)}\
-                         does not match grad 2 with length {len(grad2)}')
-    
-    global_gradient = []
+def compute_global_model_state(worker_1_state, worker_1_accuracy, worker_2_state, worker_2_accuracy, device):    
+    global_model_state = OrderedDict()
 
-    for tensor_i, tensor_j in zip(grad1, grad2):
-        # Ensure gradients are on same device
-        tensor_i_mps = tensor_i.to(MPS_DEVICE)
-        tensor_j_mps = tensor_j.to(MPS_DEVICE)
+    for name, param in worker_1_state.items():
+        param = param.to(device)
+        global_model_state[name] = param*worker_1_accuracy
 
-        mean_tensor = (tensor_i_mps+tensor_j_mps)/2
-        global_gradient.append(mean_tensor)
+    for name, param in worker_2_state.items():
+        param = param.to(device)
+        global_model_state[name] += param*worker_2_accuracy
 
-    return global_gradient
+    for name, param in global_model_state.items():
+        global_model_state[name] /= (worker_1_accuracy+worker_2_accuracy)
+
+    return global_model_state
 
 def update_local_checkpoint(checkpoint_path, device, global_model_state_dict):
     local_checkpoint = torch.load(checkpoint_path)
@@ -190,34 +187,26 @@ initialize_checkpoints(global_model, global_optimizer)
 # Train the model for 10 rounds
 epochs = 1
 device_1 = MPS_DEVICE
-device_2 = MPS_DEVICE
-for round in range(100):
+device_2 = CPU_DEVICE
+for round in range(20):
     print(f'Running round {round}')
-    mps_local_gradient = run_round(MPS_MODEL_CHECKPOINT, device_1, 
+    mps_model_state, mps_accuracy = run_round(MPS_MODEL_CHECKPOINT, device_1, 
                                 train_loader_mps, test_loader, epochs)
-    cpu_local_gradient = run_round(CPU_MODEL_CHECKPOINT, device_2,
+    cpu_model_state, cpu_accuracy = run_round(CPU_MODEL_CHECKPOINT, device_2,
                                 train_loader_cpu, test_loader, epochs)
     
-    # Compute global gradient
-    global_gradient = compute_global_gradient(mps_local_gradient, cpu_local_gradient)
+    # Compute global parameters
+    global_model_state = compute_global_model_state(mps_model_state, mps_accuracy, 
+                                                cpu_model_state, cpu_accuracy, MPS_DEVICE)
 
     # Load global checkpoint
     global_checkpoint = torch.load(GLOBAL_MODEL_CHECKPOINT)
-    global_model.load_state_dict(global_checkpoint['model_state_dict'])
+    global_model.load_state_dict(global_model_state)
     global_optimizer.load_state_dict(global_checkpoint['optimizer_state_dict'])
-
-    # Update global parameters
-    for param, gradient in zip(global_model.parameters(), global_gradient):
-        param.grad = gradient
-    global_optimizer.step()
 
     # Test the model
     run_test(global_model, MPS_DEVICE, test_loader, -1, name="Global")
 
-    # Update local parameters with global parameters
-    update_local_checkpoint(MPS_MODEL_CHECKPOINT, device_1, global_model.state_dict())
-    update_local_checkpoint(CPU_MODEL_CHECKPOINT, device_2, global_model.state_dict())
-    
     # Save the global checkpoint
     global_checkpoint_updated = {
         'epoch': round,
