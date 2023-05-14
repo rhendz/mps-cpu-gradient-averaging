@@ -37,3 +37,6 @@ class HandwritingRecognitionModel(nn.Module):
 
         # Return the final output
         return x
+    
+model = HandwritingRecognitionModel()
+print(sum(p.numel() for p in model.parameters()))
